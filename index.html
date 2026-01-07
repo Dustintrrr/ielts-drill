@@ -236,19 +236,36 @@
             margin-top: 8px;
         }
         
-        .voice-select {
-            width: 100%;
-            padding: 10px;
+        .options-row {
+            display: flex;
+            gap: 8px;
             margin-top: 10px;
-            border-radius: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .option-btn {
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: 1px solid #444;
+            background: transparent;
+            color: #888;
+            font-size: 0.75rem;
+            cursor: pointer;
+        }
+        
+        .option-btn.active {
+            background: rgba(39, 174, 96, 0.3);
+            border-color: #27ae60;
+            color: #fff;
+        }
+        
+        .accent-select {
+            padding: 6px 12px;
+            border-radius: 6px;
             border: 1px solid #444;
             background: rgba(0,0,0,0.3);
             color: #fff;
-            font-size: 0.9rem;
-        }
-        
-        .voice-select option {
-            background: #1a1a2e;
+            font-size: 0.75rem;
         }
     </style>
 </head>
@@ -257,9 +274,14 @@
     <p class="subtitle">English Listening Practice for Numbers</p>
     
     <div class="settings">
-        <button class="setting-btn" data-speed="0.7">🐢 Slow</button>
-        <button class="setting-btn active" data-speed="0.85">🚶 Normal</button>
-        <button class="setting-btn" data-speed="1.0">🏃 Fast</button>
+        <button class="setting-btn" data-speed="slow">🐢 Slow</button>
+        <button class="setting-btn active" data-speed="normal">🚶 Normal</button>
+        <button class="setting-btn" data-speed="fast">🏃 Fast</button>
+        <select class="accent-select" id="accentSelect">
+            <option value="en-US">🇺🇸 US</option>
+            <option value="en-GB">🇬🇧 UK</option>
+            <option value="en-AU">🇦🇺 AU</option>
+        </select>
     </div>
     
     <div class="category-toggles" id="categoryToggles"></div>
@@ -269,7 +291,7 @@
         <span class="voice-indicator" id="voiceIndicator">--</span>
         
         <button class="play-btn" id="playBtn" onclick="playQuestion()">
-            <span>▶️</span> <span id="playText">Tap to Play</span>
+            <span>▶️</span> <span id="playText">Tap to Start</span>
         </button>
         
         <div class="input-row">
@@ -280,9 +302,9 @@
         <div class="feedback" id="feedback"></div>
         <p class="hint" id="hintText"></p>
         
-        <select class="voice-select" id="voiceSelect">
-            <option value="">Loading voices...</option>
-        </select>
+        <div class="options-row">
+            <button class="option-btn active" id="autoPlayBtn" onclick="toggleAutoPlay()">Auto-play: ON</button>
+        </div>
     </div>
     
     <div class="card">
@@ -308,6 +330,8 @@
             <div class="progress-fill" id="progressFill" style="width: 0%"></div>
         </div>
     </div>
+    
+    <audio id="audioPlayer" style="display:none"></audio>
 
     <script>
         // Number to words conversion
@@ -438,14 +462,13 @@
         // State
         let currentQuestion = null;
         let stats = { correct: 0, total: 0, streak: 0 };
-        let speed = 0.85;
+        let speed = "normal";
+        let accent = "en-US";
+        let autoPlay = true;
         let activeCategories = new Set(Object.keys(generators));
         let weights = {};
         Object.keys(generators).forEach(k => weights[k] = 1);
         weights["TEEN_TY"] = 2;
-        
-        let selectedVoice = null;
-        let englishVoices = [];
 
         // Initialize category toggles
         const catLabels = {
@@ -476,79 +499,74 @@
             btn.onclick = () => {
                 document.querySelectorAll(".setting-btn[data-speed]").forEach(b => b.classList.remove("active"));
                 btn.classList.add("active");
-                speed = parseFloat(btn.dataset.speed);
+                speed = btn.dataset.speed;
             };
         });
+        
+        // Accent selector
+        document.getElementById("accentSelect").addEventListener("change", (e) => {
+            accent = e.target.value;
+        });
+        
+        // Auto-play toggle
+        function toggleAutoPlay() {
+            autoPlay = !autoPlay;
+            const btn = document.getElementById("autoPlayBtn");
+            btn.textContent = autoPlay ? "Auto-play: ON" : "Auto-play: OFF";
+            btn.classList.toggle("active", autoPlay);
+        }
 
-        // Voice selection
-        function loadVoices() {
-            const voices = speechSynthesis.getVoices();
-            englishVoices = voices.filter(v => v.lang.startsWith("en"));
-            
-            // Prefer high-quality voices
-            const preferredKeywords = ["Natural", "Premium", "Enhanced", "Neural", "Siri", "Google", "Microsoft"];
-            englishVoices.sort((a, b) => {
-                const aScore = preferredKeywords.some(k => a.name.includes(k)) ? 1 : 0;
-                const bScore = preferredKeywords.some(k => b.name.includes(k)) ? 1 : 0;
-                return bScore - aScore;
+        // Google TTS function (better quality)
+        function speak(text) {
+            return new Promise((resolve) => {
+                const audio = document.getElementById("audioPlayer");
+                
+                // Speed mapping for Google TTS (it uses a different scale)
+                const speedMap = { slow: 0.8, normal: 1, fast: 1.2 };
+                const rate = speedMap[speed] || 1;
+                
+                // Use Google Translate TTS
+                const encodedText = encodeURIComponent(text);
+                const lang = accent;
+                
+                // Google TTS URL
+                const url = `https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&tl=${lang}&q=${encodedText}`;
+                
+                audio.src = url;
+                audio.playbackRate = rate;
+                
+                const flag = accent === "en-GB" ? "🇬🇧" : accent === "en-AU" ? "🇦🇺" : "🇺🇸";
+                document.getElementById("voiceIndicator").textContent = flag;
+                
+                audio.onended = resolve;
+                audio.onerror = () => {
+                    // Fallback to Web Speech API if Google TTS fails
+                    speakFallback(text).then(resolve);
+                };
+                
+                audio.play().catch(() => {
+                    // Fallback to Web Speech API
+                    speakFallback(text).then(resolve);
+                });
             });
-            
-            const select = document.getElementById("voiceSelect");
-            select.innerHTML = '<option value="random">🎲 Random Voice</option>';
-            
-            englishVoices.forEach((voice, i) => {
-                const opt = document.createElement("option");
-                opt.value = i;
-                const flag = voice.lang.includes("GB") ? "🇬🇧" : 
-                             voice.lang.includes("AU") ? "🇦🇺" : 
-                             voice.lang.includes("US") ? "🇺🇸" : "🌐";
-                opt.textContent = `${flag} ${voice.name}`;
-                select.appendChild(opt);
-            });
-            
-            // Auto-select first high-quality voice if available
-            if (englishVoices.length > 0) {
-                selectedVoice = englishVoices[0];
-            }
         }
         
-        document.getElementById("voiceSelect").addEventListener("change", (e) => {
-            if (e.target.value === "random") {
-                selectedVoice = null;
-            } else {
-                selectedVoice = englishVoices[parseInt(e.target.value)];
-            }
-        });
-
-        function getVoice() {
-            if (selectedVoice) return selectedVoice;
-            if (englishVoices.length === 0) return null;
-            return englishVoices[Math.floor(Math.random() * englishVoices.length)];
-        }
-
-        function speak(text) {
+        // Fallback to Web Speech API
+        function speakFallback(text) {
             return new Promise(resolve => {
-                // Cancel any ongoing speech
                 speechSynthesis.cancel();
-                
                 const utterance = new SpeechSynthesisUtterance(text);
-                utterance.rate = speed;
+                const speedMap = { slow: 0.7, normal: 0.85, fast: 1 };
+                utterance.rate = speedMap[speed] || 0.85;
+                utterance.lang = accent;
                 
-                const voice = getVoice();
-                if (voice) {
-                    utterance.voice = voice;
-                    utterance.lang = voice.lang;
-                    
-                    const flag = voice.lang.includes("GB") ? "🇬🇧" : 
-                                 voice.lang.includes("AU") ? "🇦🇺" : 
-                                 voice.lang.includes("US") ? "🇺🇸" : "🌐";
-                    document.getElementById("voiceIndicator").textContent = flag + " " + voice.name.split(" ")[0];
-                }
+                const voices = speechSynthesis.getVoices();
+                const matchingVoice = voices.find(v => v.lang.startsWith(accent.split("-")[0]));
+                if (matchingVoice) utterance.voice = matchingVoice;
                 
                 utterance.onend = resolve;
                 utterance.onerror = resolve;
                 
-                // Small delay to ensure cancel is processed
                 setTimeout(() => speechSynthesis.speak(utterance), 50);
             });
         }
@@ -595,7 +613,7 @@
             return str;
         }
 
-        function checkAnswer() {
+        async function checkAnswer() {
             if (!currentQuestion) return;
             
             const input = document.getElementById("answerInput").value;
@@ -607,7 +625,9 @@
             
             stats.total++;
             
-            if (userAnswer === correctAnswer) {
+            const wasCorrect = userAnswer === correctAnswer;
+            
+            if (wasCorrect) {
                 stats.correct++;
                 stats.streak++;
                 feedback.textContent = "✅ Correct!";
@@ -619,13 +639,24 @@
                 feedback.className = "feedback wrong";
                 hintText.textContent = 'Speech: "' + currentQuestion.speech + '"';
                 weights[currentQuestion.type] = Math.min(3, weights[currentQuestion.type] + 0.2);
-                
-                setTimeout(() => speak("The answer was, " + currentQuestion.speech), 500);
             }
             
             updateStats();
+            
+            // If wrong, speak the correct answer first
+            if (!wasCorrect) {
+                await speak("The answer was, " + currentQuestion.speech);
+            }
+            
             currentQuestion = null;
             document.getElementById("playText").textContent = "Next Question";
+            
+            // Auto-play next question
+            if (autoPlay) {
+                setTimeout(() => {
+                    playQuestion();
+                }, wasCorrect ? 800 : 1200);
+            }
         }
 
         function updateStats() {
@@ -646,15 +677,11 @@
             }
         });
 
-        // Load voices
+        // Preload voices for fallback
         if (speechSynthesis.onvoiceschanged !== undefined) {
-            speechSynthesis.onvoiceschanged = loadVoices;
+            speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices();
         }
-        loadVoices();
-        
-        // Reload voices after a delay (needed for some browsers)
-        setTimeout(loadVoices, 100);
-        setTimeout(loadVoices, 500);
+        speechSynthesis.getVoices();
     </script>
 </body>
 </html>
